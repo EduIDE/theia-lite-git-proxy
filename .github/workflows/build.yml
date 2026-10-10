@@ -8,6 +8,17 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
-    uses: ls1intum/.github/.github/workflows/build-and-push-docker-image.yml@v1.1.0
+    uses: EduIDE/.github/.github/workflows/build-and-push-docker-image.yml@v1
+    with:
+      docker-file: Dockerfile
+      # Explicit lowercase image name: GHCR rejects the default derived from the
+      # mixed-case org path (ghcr.io/EduIDE/...), which failed every build here.
+      image-name: eduide/theia-lite-git-proxy
+      docker-context: .
+    secrets: inherit
