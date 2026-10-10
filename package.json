@@ -6,6 +6,7 @@
   "bin": "bin.js",
   "scripts": {
     "start": "cross-env micro --listen=tcp://0.0.0.0:$PORT",
+    "test": "node --test",
     "dev": "micro-dev",
     "travis-deploy-once": "travis-deploy-once --pro",
     "semantic-release": "semantic-release"

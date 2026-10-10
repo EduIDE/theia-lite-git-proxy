@@ -50,6 +50,7 @@ const allowMethods = [
 ]
 
 const allow = require('./allow-request.js')
+const allowHost = require('./allow-host.js')
 
 const filter = (predicate, middleware) => {
   function corsProxyMiddleware (req, res, next) {
@@ -86,7 +87,10 @@ function noop (_req, _res, next) {
   next()
 }
 
-module.exports = ({ origin, insecure_origins = [], authorization = noop } = {}) => {
+module.exports = ({ origin, insecure_origins = [], authorization = noop, allowed_hosts = [] } = {}) => {
+  if (!allowed_hosts || allowed_hosts.length === 0) {
+    console.warn('[cors-proxy] WARNING: no upstream hosts are allowed (allowed_hosts / GIT_PROXY_ALLOWED_HOSTS is empty). The proxy is failing CLOSED and will reject every request. Set GIT_PROXY_ALLOWED_HOSTS to a comma-separated allowlist of git hosts to enable it.')
+  }
   function predicate (req) {
     let u = url.parse(req.url, true)
     // Not a git request, skip
@@ -103,6 +107,18 @@ module.exports = ({ origin, insecure_origins = [], authorization = noop } = {}) 
   function middleware (req, res, next) {
     let u = url.parse(req.url, true)
 
+    let p = u.path
+    let parts = p.match(/\/([^\/]*)\/(.*)/)
+    let pathdomain = parts[1]
+    let remainingpath = parts[2]
+
+    // SSRF guard: reject any upstream host that is not on the allowlist or that
+    // resolves to a private / loopback / link-local / metadata address, BEFORE
+    // making the request or forwarding any credential header to it.
+    const verdict = allowHost(pathdomain, allowed_hosts)
+    if (!verdict.ok) {
+      return send(res, 403, '')
+    }
 
     let headers = {}
     for (let h of allowHeaders) {
@@ -116,10 +132,6 @@ module.exports = ({ origin, insecure_origins = [], authorization = noop } = {}) 
       headers['user-agent'] = 'git/@isomorphic-git/cors-proxy'
     }
 
-    let p = u.path
-    let parts = p.match(/\/([^\/]*)\/(.*)/)
-    let pathdomain = parts[1]
-    let remainingpath = parts[2]
     let protocol = insecure_origins.includes(pathdomain) ? 'http' : 'https'
 
     fetch(

@@ -9,6 +9,16 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+gitProxy:
+  # Comma-separated allowlist of upstream git hosts the proxy may reach.
+  # REQUIRED: the proxy fails closed and rejects every request when this is empty.
+  allowedHosts: "github.com,gitlab.com,bitbucket.org"
+  # Value for the Access-Control-Allow-Origin header. Empty leaves it unset.
+  allowOrigin: ""
+  # Optional HS256 JWT secret. When set, only requests carrying a valid JWT in
+  # the X-Authorization header are proxied. Prefer sourcing this from a Secret.
+  authSecret: ""
+
 service:
   type: ClusterIP
   port: 80
