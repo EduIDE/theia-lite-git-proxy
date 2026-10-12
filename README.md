@@ -110,7 +110,7 @@ Environment variables:
 - `INSECURE_HTTP_ORIGINS` comma separated list of origins for which HTTP should be used instead of HTTPS (added to make developing against locally running git servers easier)
 - `GIT_PROXY_ALLOWED_HOSTS` **(required)** comma separated allowlist of upstream git hosts the proxy may reach, e.g. `github.com,gitlab.com`. A subdomain of an allowlisted host is also allowed (`github.com` permits `api.github.com`). If this is empty the proxy fails **closed** and rejects every request. See [Security](#security).
 - `GIT_PROXY_AUTH_SECRET` optional HS256 JWT secret. When set, only requests carrying a valid JWT are proxied (see [Security](#security)).
-- `GIT_PROXY_AUTH_HEADER` header the JWT is read from (default `x-authorization`).
+- `GIT_PROXY_AUTH_HEADER` names the request header the JWT is read from (the header itself defaults to `x-authorization`).
 
 ## Security
 
