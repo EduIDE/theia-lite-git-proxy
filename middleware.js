@@ -50,6 +50,29 @@ const allowMethods = [
 ]
 
 const allow = require('./allow-request.js')
+const allowHost = require('./allow-host.js')
+
+// The header that authenticates the caller to THIS proxy (verified by
+// authorization.js). It must never be forwarded upstream, or the proxy's own
+// bearer token leaks to the allowlisted git host and stays valid for replay.
+const proxyAuthHeader = (process.env.GIT_PROXY_AUTH_HEADER || 'x-authorization').toLowerCase()
+
+// Build the header set forwarded to the upstream git host from the incoming
+// request headers: allowlisted headers only, minus the proxy's own auth header,
+// with a git-like user-agent so GitHub does not change its behavior.
+function forwardHeaders (reqHeaders) {
+  let headers = {}
+  for (let h of allowHeaders) {
+    if (reqHeaders[h]) {
+      headers[h] = reqHeaders[h]
+    }
+  }
+  delete headers[proxyAuthHeader]
+  if (!headers['user-agent'] || !headers['user-agent'].startsWith('git/')) {
+    headers['user-agent'] = 'git/@isomorphic-git/cors-proxy'
+  }
+  return headers
+}
 
 const filter = (predicate, middleware) => {
   function corsProxyMiddleware (req, res, next) {
@@ -86,7 +109,10 @@ function noop (_req, _res, next) {
   next()
 }
 
-module.exports = ({ origin, insecure_origins = [], authorization = noop } = {}) => {
+module.exports = ({ origin, insecure_origins = [], authorization = noop, allowed_hosts = [] } = {}) => {
+  if (!allowed_hosts || allowed_hosts.length === 0) {
+    console.warn('[cors-proxy] WARNING: no upstream hosts are allowed (allowed_hosts / GIT_PROXY_ALLOWED_HOSTS is empty). The proxy is failing CLOSED and will reject every request. Set GIT_PROXY_ALLOWED_HOSTS to a comma-separated allowlist of git hosts to enable it.')
+  }
   function predicate (req) {
     let u = url.parse(req.url, true)
     // Not a git request, skip
@@ -103,23 +129,21 @@ module.exports = ({ origin, insecure_origins = [], authorization = noop } = {}) 
   function middleware (req, res, next) {
     let u = url.parse(req.url, true)
 
-
-    let headers = {}
-    for (let h of allowHeaders) {
-      if (req.headers[h]) {
-        headers[h] = req.headers[h]
-      }
-    }
-
-    // GitHub uses user-agent sniffing for git/* and changes its behavior which is frustrating
-    if (!headers['user-agent'] || !headers['user-agent'].startsWith('git/')) {
-      headers['user-agent'] = 'git/@isomorphic-git/cors-proxy'
-    }
-
     let p = u.path
     let parts = p.match(/\/([^\/]*)\/(.*)/)
     let pathdomain = parts[1]
     let remainingpath = parts[2]
+
+    // SSRF guard: reject any upstream host that is not on the allowlist or that
+    // resolves to a private / loopback / link-local / metadata address, BEFORE
+    // making the request or forwarding any credential header to it.
+    const verdict = allowHost(pathdomain, allowed_hosts)
+    if (!verdict.ok) {
+      return send(res, 403, '')
+    }
+
+    let headers = forwardHeaders(req.headers)
+
     let protocol = insecure_origins.includes(pathdomain) ? 'http' : 'https'
 
     fetch(
@@ -161,3 +185,5 @@ module.exports = ({ origin, insecure_origins = [], authorization = noop } = {}) 
   })
   return filter(predicate, cors(compose(sendCorsOK, authorization, middleware)))
 }
+
+module.exports.forwardHeaders = forwardHeaders

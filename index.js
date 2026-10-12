@@ -4,7 +4,13 @@ const pkg = require('./package.json')
 const {send} = require('micro')
 const origin = process.env.ALLOW_ORIGIN
 const insecure_origins = (process.env.INSECURE_HTTP_ORIGINS || '').split(',')
-const middleware = require('./middleware.js')({ origin, insecure_origins })
+const allowed_hosts = (process.env.GIT_PROXY_ALLOWED_HOSTS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean)
+// Optional JWT gate; a no-op unless GIT_PROXY_AUTH_SECRET is configured.
+const authorization = require('./authorization.js')()
+const middleware = require('./middleware.js')({ origin, insecure_origins, allowed_hosts, authorization })
 
 async function service (req, res) {
   middleware(req, res, () => {

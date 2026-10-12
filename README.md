@@ -108,6 +108,26 @@ Environment variables:
 - `PORT` the port to listen to (if run with `npm start`)
 - `ALLOW_ORIGIN` the value for the 'Access-Control-Allow-Origin' CORS header
 - `INSECURE_HTTP_ORIGINS` comma separated list of origins for which HTTP should be used instead of HTTPS (added to make developing against locally running git servers easier)
+- `GIT_PROXY_ALLOWED_HOSTS` **(required)** comma separated allowlist of upstream git hosts the proxy may reach, e.g. `github.com,gitlab.com`. A subdomain of an allowlisted host is also allowed (`github.com` permits `api.github.com`). If this is empty the proxy fails **closed** and rejects every request. See [Security](#security).
+- `GIT_PROXY_AUTH_SECRET` optional HS256 JWT secret. When set, only requests carrying a valid JWT are proxied (see [Security](#security)).
+- `GIT_PROXY_AUTH_HEADER` names the request header the JWT is read from (the header itself defaults to `x-authorization`).
+
+## Security
+
+This proxy builds the upstream URL from the host segment of the request path and pipes the response back to the caller. Left unrestricted it is an open proxy and an SSRF vector (an attacker can reach internal services or the cloud metadata endpoint and exfiltrate the response). Two always-on controls mitigate this:
+
+1. **Host allowlist.** The upstream host must appear on `GIT_PROXY_ALLOWED_HOSTS`. The allowlist fails **closed**: if it is unset the proxy logs a warning at startup and rejects every request with `403`. The check validates the exact hostname that `fetch` will dial: a host segment carrying userinfo (`github.com:x@169.254.169.254`) or any other URL authority syntax is rejected, so the allowlisted name before the `@` cannot mask the real host after it. The caller's `authorization` git credential header is only forwarded once this check passes, because a disallowed host is rejected before the upstream request is made.
+2. **Private address block.** Requests whose target is a loopback, private, link-local or unique-local address, or the metadata IP `169.254.169.254`, are rejected with `403` even if that address is on the allowlist. This is enforced on literal IPs and loopback hostnames, covers the full `fe80::/10` and `fc00::/7` IPv6 ranges, and normalizes IPv4-mapped IPv6 addresses (both `::ffff:1.2.3.4` and `::ffff:7f00:1`) before applying the IPv4 rules.
+
+The proxy's own authentication header (`x-authorization`, or `GIT_PROXY_AUTH_HEADER`) is never forwarded upstream: it authenticates the caller to this proxy, not to the git host, so forwarding it would leak a replayable token to the allowlisted host.
+
+`redirect: 'manual'` is kept so the proxy never follows an upstream redirect into a blocked target.
+
+**Out of scope:** DNS rebinding. The checks validate the literal host only; a hostname that an attacker controls and points at a private IP is not caught. Full protection would require resolving the name and pinning the connection to the validated address.
+
+### Optional JWT authentication
+
+Set `GIT_PROXY_AUTH_SECRET` to require an HS256 JWT. Proxied git requests already use the `Authorization` header for git credentials, so the proxy's own token is read from `X-Authorization` by default (override with `GIT_PROXY_AUTH_HEADER`). Requests without a valid, unexpired token receive `401`. When the secret is unset, authentication is a no-op and the host allowlist remains the always-on control.
 
 
 ## Middleware usage
@@ -131,6 +151,7 @@ app.use(corsProxy(options))
 
 - `origin`: _string_. The value for the 'Access-Control-Allow-Origin' CORS header
 - `insecure_origins`: _string[]_. Array of origins for which HTTP should be used instead of HTTPS (added to make developing against locally running git servers easier)
+- `allowed_hosts`: _string[]_. Allowlist of upstream git hosts the proxy may reach. Empty means the proxy fails **closed** and rejects every request. Private / loopback / link-local / metadata targets are always blocked regardless of this list. See [Security](#security).
 - `authorization`: _(req, res, next) => void_. A middleware function you can use to handle custom authorization. Is run after filtering for git-like requests and handling CORS but before the request is proxied.
 
 _Example:_

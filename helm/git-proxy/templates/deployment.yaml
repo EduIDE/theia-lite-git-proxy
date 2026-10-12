@@ -26,6 +26,17 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+          env:
+            - name: GIT_PROXY_ALLOWED_HOSTS
+              value: {{ .Values.gitProxy.allowedHosts | quote }}
+            {{- if .Values.gitProxy.allowOrigin }}
+            - name: ALLOW_ORIGIN
+              value: {{ .Values.gitProxy.allowOrigin | quote }}
+            {{- end }}
+            {{- if .Values.gitProxy.authSecret }}
+            - name: GIT_PROXY_AUTH_SECRET
+              value: {{ .Values.gitProxy.authSecret | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
