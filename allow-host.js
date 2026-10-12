@@ -1,18 +1,19 @@
 'use strict'
 const net = require('net')
 
-// Parse the "host[:port]" first path segment into a bare, lower-cased hostname.
-// Handles IPv4, bracketed IPv6 ([::1]:443) and plain IPv6 literals.
+// Parse the "host[:port]" first path segment into the bare, lower-cased hostname
+// that the upstream URL parser (and therefore `fetch`) will actually dial.
+// Accepts only "name[:port]" or "[ipv6][:port]" and rejects userinfo (user@host)
+// or any other URL authority syntax. Without this, a segment like
+// "github.com:x@169.254.169.254" would split to the allowlisted "github.com"
+// while `fetch` dials 169.254.169.254, bypassing the allowlist (CWE-918).
 function parseHost (pathdomain) {
   if (!pathdomain) return ''
-  let host = pathdomain
-  const bracketed = host.match(/^\[([^\]]+)\](?::\d+)?$/)
-  if (bracketed) return bracketed[1].toLowerCase()
-  // host:port where host is a name or IPv4 (exactly one colon)
-  if (host.split(':').length === 2) {
-    host = host.split(':')[0]
-  }
-  return host.toLowerCase()
+  if (!/^(?:[a-z0-9.-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?$/i.test(pathdomain)) return ''
+  let u
+  try { u = new URL(`https://${pathdomain}/`) } catch (e) { return '' }
+  if (u.username || u.password) return ''
+  return u.hostname.replace(/^\[|\]$/g, '').toLowerCase()
 }
 
 function isBlockedIpv4 (ip) {
@@ -27,14 +28,36 @@ function isBlockedIpv4 (ip) {
   return false
 }
 
+// CIDR-aware block list for the full private / local IPv6 ranges, so the whole
+// fe80::/10 link-local range (not just fe80::) and fc00::/7 unique-local range
+// are covered.
+const ipv6BlockList = new net.BlockList()
+ipv6BlockList.addAddress('::1', 'ipv6')        // loopback
+ipv6BlockList.addAddress('::', 'ipv6')         // unspecified
+ipv6BlockList.addSubnet('fe80::', 10, 'ipv6')  // link-local fe80::/10
+ipv6BlockList.addSubnet('fc00::', 7, 'ipv6')   // unique-local fc00::/7
+
+// Extract the embedded IPv4 address from an IPv4-mapped IPv6 literal, in both
+// the dotted "::ffff:1.2.3.4" and hexadecimal "::ffff:7f00:1" forms that
+// net.isIPv6 accepts. Returns null when the address is not IPv4-mapped.
+function mappedIpv4 (a) {
+  const m = a.match(/^::ffff:(.+)$/)
+  if (!m) return null
+  const rest = m[1]
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(rest)) return rest
+  const hex = rest.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (!hex) return null
+  const hi = parseInt(hex[1], 16)
+  const lo = parseInt(hex[2], 16)
+  return [(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff].join('.')
+}
+
 function isBlockedIpv6 (ip) {
   const a = ip.toLowerCase()
-  if (a === '::1' || a === '::') return true  // loopback / unspecified
-  if (a.startsWith('fe80')) return true       // link-local fe80::/10
-  if (a.startsWith('fc') || a.startsWith('fd')) return true // unique-local fc00::/7
-  const mapped = a.match(/(?:::ffff:)(\d+\.\d+\.\d+\.\d+)$/)
-  if (mapped) return isBlockedIpv4(mapped[1])
-  return false
+  // IPv4-mapped addresses reach an IPv4 host, so apply the IPv4 rules to them.
+  const embedded = mappedIpv4(a)
+  if (embedded) return isBlockedIpv4(embedded)
+  return ipv6BlockList.check(a, 'ipv6')
 }
 
 // Hosts that must never be proxied to, regardless of the allowlist: loopback

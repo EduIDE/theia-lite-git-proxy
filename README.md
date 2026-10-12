@@ -116,8 +116,10 @@ Environment variables:
 
 This proxy builds the upstream URL from the host segment of the request path and pipes the response back to the caller. Left unrestricted it is an open proxy and an SSRF vector (an attacker can reach internal services or the cloud metadata endpoint and exfiltrate the response). Two always-on controls mitigate this:
 
-1. **Host allowlist.** The upstream host must appear on `GIT_PROXY_ALLOWED_HOSTS`. The allowlist fails **closed**: if it is unset the proxy logs a warning at startup and rejects every request with `403`. Credential headers (`authorization` / `x-authorization`) are only forwarded once this check passes, because a disallowed host is rejected before the upstream request is made.
-2. **Private address block.** Requests whose target is a loopback, private, link-local or unique-local address, or the metadata IP `169.254.169.254`, are rejected with `403` even if that address is on the allowlist. This is enforced on literal IPs and loopback hostnames.
+1. **Host allowlist.** The upstream host must appear on `GIT_PROXY_ALLOWED_HOSTS`. The allowlist fails **closed**: if it is unset the proxy logs a warning at startup and rejects every request with `403`. The check validates the exact hostname that `fetch` will dial: a host segment carrying userinfo (`github.com:x@169.254.169.254`) or any other URL authority syntax is rejected, so the allowlisted name before the `@` cannot mask the real host after it. The caller's `authorization` git credential header is only forwarded once this check passes, because a disallowed host is rejected before the upstream request is made.
+2. **Private address block.** Requests whose target is a loopback, private, link-local or unique-local address, or the metadata IP `169.254.169.254`, are rejected with `403` even if that address is on the allowlist. This is enforced on literal IPs and loopback hostnames, covers the full `fe80::/10` and `fc00::/7` IPv6 ranges, and normalizes IPv4-mapped IPv6 addresses (both `::ffff:1.2.3.4` and `::ffff:7f00:1`) before applying the IPv4 rules.
+
+The proxy's own authentication header (`x-authorization`, or `GIT_PROXY_AUTH_HEADER`) is never forwarded upstream: it authenticates the caller to this proxy, not to the git host, so forwarding it would leak a replayable token to the allowlisted host.
 
 `redirect: 'manual'` is kept so the proxy never follows an upstream redirect into a blocked target.
 

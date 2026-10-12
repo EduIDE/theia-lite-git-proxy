@@ -6,6 +6,7 @@ const crypto = require('crypto')
 const allowHost = require('../allow-host.js')
 const createAuthorization = require('../authorization.js')
 const { verifyHs256 } = createAuthorization
+const { forwardHeaders } = require('../middleware.js')
 
 const ALLOW = ['github.com', 'gitlab.com', 'bitbucket.org']
 
@@ -58,6 +59,54 @@ for (const target of [
     assert.strictEqual(v.reason, 'blocked-address')
   })
 }
+
+// Userinfo in the host segment must not fool the allowlist: fetch would dial the
+// host after '@', not the allowlisted name before it (CWE-918).
+for (const target of [
+  'github.com:x@169.254.169.254',
+  'github.com:x@evil.com',
+  'github.com@169.254.169.254'
+]) {
+  test(`rejects userinfo authority ${target}`, () => {
+    assert.strictEqual(allowHost(target, ALLOW).ok, false)
+  })
+}
+
+// Private/local IPv6 ranges must be blocked across the whole CIDR range, not
+// just the lowest address, and for IPv4-mapped forms in either notation.
+for (const target of [
+  '[fe80::1]',   // link-local, low end of fe80::/10
+  '[fe81::1]',   // link-local, mid range (missed by a bare "fe80" prefix check)
+  '[febf::1]',   // link-local, high end of fe80::/10
+  '[fd00::1]',   // unique-local fc00::/7
+  '[::ffff:7f00:1]',     // IPv4-mapped 127.0.0.1 in hex notation
+  '[::ffff:a9fe:a9fe]',  // IPv4-mapped 169.254.169.254 (metadata) in hex notation
+  '[::ffff:127.0.0.1]'   // IPv4-mapped 127.0.0.1 in dotted notation
+]) {
+  test(`blocks internal IPv6 target ${target} even if put on the allowlist`, () => {
+    const v = allowHost(target, ALLOW.concat([target.replace(/[\[\]]/g, '')]))
+    assert.strictEqual(v.ok, false)
+    assert.strictEqual(v.reason, 'blocked-address')
+  })
+}
+
+test('allows a public IPv6 literal outside the blocked ranges when allowlisted', () => {
+  assert.strictEqual(allowHost('[2606:4700::1111]', ALLOW.concat(['2606:4700::1111'])).ok, true)
+})
+
+// --- upstream header forwarding ---
+
+test('forwards allowlisted headers and the git credential header upstream', () => {
+  const out = forwardHeaders({ authorization: 'Bearer gitcreds', accept: 'application/json' })
+  assert.strictEqual(out.authorization, 'Bearer gitcreds')
+  assert.strictEqual(out.accept, 'application/json')
+})
+
+test('does not forward the proxy auth header (x-authorization) upstream', () => {
+  const out = forwardHeaders({ 'x-authorization': 'Bearer proxytoken', authorization: 'Bearer gitcreds' })
+  assert.strictEqual(out['x-authorization'], undefined)
+  assert.strictEqual(out.authorization, 'Bearer gitcreds')
+})
 
 // --- authorization (HS256 JWT) ---
 

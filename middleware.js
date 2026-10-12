@@ -52,6 +52,28 @@ const allowMethods = [
 const allow = require('./allow-request.js')
 const allowHost = require('./allow-host.js')
 
+// The header that authenticates the caller to THIS proxy (verified by
+// authorization.js). It must never be forwarded upstream, or the proxy's own
+// bearer token leaks to the allowlisted git host and stays valid for replay.
+const proxyAuthHeader = (process.env.GIT_PROXY_AUTH_HEADER || 'x-authorization').toLowerCase()
+
+// Build the header set forwarded to the upstream git host from the incoming
+// request headers: allowlisted headers only, minus the proxy's own auth header,
+// with a git-like user-agent so GitHub does not change its behavior.
+function forwardHeaders (reqHeaders) {
+  let headers = {}
+  for (let h of allowHeaders) {
+    if (reqHeaders[h]) {
+      headers[h] = reqHeaders[h]
+    }
+  }
+  delete headers[proxyAuthHeader]
+  if (!headers['user-agent'] || !headers['user-agent'].startsWith('git/')) {
+    headers['user-agent'] = 'git/@isomorphic-git/cors-proxy'
+  }
+  return headers
+}
+
 const filter = (predicate, middleware) => {
   function corsProxyMiddleware (req, res, next) {
     if (predicate(req, res)) {
@@ -120,17 +142,7 @@ module.exports = ({ origin, insecure_origins = [], authorization = noop, allowed
       return send(res, 403, '')
     }
 
-    let headers = {}
-    for (let h of allowHeaders) {
-      if (req.headers[h]) {
-        headers[h] = req.headers[h]
-      }
-    }
-
-    // GitHub uses user-agent sniffing for git/* and changes its behavior which is frustrating
-    if (!headers['user-agent'] || !headers['user-agent'].startsWith('git/')) {
-      headers['user-agent'] = 'git/@isomorphic-git/cors-proxy'
-    }
+    let headers = forwardHeaders(req.headers)
 
     let protocol = insecure_origins.includes(pathdomain) ? 'http' : 'https'
 
@@ -173,3 +185,5 @@ module.exports = ({ origin, insecure_origins = [], authorization = noop, allowed
   })
   return filter(predicate, cors(compose(sendCorsOK, authorization, middleware)))
 }
+
+module.exports.forwardHeaders = forwardHeaders
