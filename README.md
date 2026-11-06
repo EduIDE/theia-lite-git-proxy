@@ -76,6 +76,10 @@ Namely, it blocks requests that don't look like valid git requests.
 npm install @isomorphic-git/cors-proxy
 ```
 
+## Development
+
+The Docker image and CI run on Node.js 24. Run the tests with `npm ci && npm test`; CI runs them on every pull request and push to `main` before it builds the image.
+
 ## CLI usage
 
 Start proxy on default port 9999:
